@@ -17,7 +17,7 @@ canvas{width:100%;max-width:600px;aspect-ratio:1/1;max-height:100%;display:block
 (function(){
 // ===== НАСТРОЙКИ =====
 var APP_LINK='https://t.me/Realcyberfoxbot/tower'; // ссылка на твоё Mini App
-var LEADERBOARD_URL='';  // адрес сервера рейтинга (необязательно), см. описание: GET /top, POST /score
+var API_URL='';  // адрес твоего Worker (https://....workers.dev, без слэша). Пусто = без лимита попыток, рейтинга и покупок
 
 var W=600,H=600,BH=28,BASE=300;
 var tg=(window.Telegram&&Telegram.WebApp)||null;
@@ -38,17 +38,53 @@ try{if(tg&&tg.CloudStorage)tg.CloudStorage.getItems(['tw_best','tw_top','tw_mute
 })}catch(e){}
 function save(k,v){lsSet(k,v);try{if(tg&&tg.CloudStorage)tg.CloudStorage.setItem(k,v)}catch(e){}}
 
-// ===== РЕЙТИНГ (нужен свой сервер) =====
+// ===== СЕРВЕР: ПОПЫТКИ, РЕЙТИНГ, ПОКУПКИ =====
+var att=null,srvOff=0,busy=false,msg='',lastFetch=0;
+function api(path,body){
+  var o={initData:tg?tg.initData:''};for(var k in body)o[k]=body[k];
+  return fetch(API_URL+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})
+    .then(function(r){return r.json().then(function(j){j._status=r.status;return j})});
+}
+function setAtt(j){if(j&&j.free!==undefined){att=j;srvOff=j.now*1000-Date.now()}}
+function loadAtt(){
+  if(!API_URL)return;lastFetch=Date.now();
+  api('/state',{}).then(function(j){if(j._status===401)msg='открой игру заново через Telegram';else setAtt(j)})
+    ['catch'](function(){msg='нет связи с сервером'});
+}
 function lbSubmit(sc){
-  if(!LEADERBOARD_URL||!window.fetch)return;
-  try{fetch(LEADERBOARD_URL+'/score',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({initData:tg?tg.initData:'',score:sc})}).then(lbLoad)['catch'](function(){})}catch(e){}
+  if(!API_URL)return;
+  api('/score',{score:sc}).then(function(j){if(j.top)remote=j.top.slice(0,5);setAtt(j)})['catch'](function(){});
 }
 function lbLoad(){
-  if(!LEADERBOARD_URL||!window.fetch)return;
-  try{fetch(LEADERBOARD_URL+'/top').then(function(r){return r.json()}).then(function(a){
-    if(Array.isArray(a))remote=a.slice(0,5)})['catch'](function(){})}catch(e){}
+  if(!API_URL||!window.fetch)return;
+  fetch(API_URL+'/top').then(function(r){return r.json()}).then(function(a){if(Array.isArray(a))remote=a.slice(0,5)})['catch'](function(){});
 }
+function startRun(){
+  if(busy)return;busy=true;msg='';
+  api('/start',{}).then(function(j){
+    busy=false;setAtt(j);
+    if(j._status===200)init();else{state='menu';if(j.error&&j.error!=='no attempts')msg='ошибка: '+j.error}
+  })['catch'](function(){busy=false;state='menu';msg='нет связи с сервером'});
+}
+function buy(){
+  if(busy)return;busy=true;msg='';
+  api('/buy',{qty:1}).then(function(j){
+    busy=false;
+    if(!j.link){msg='не удалось создать счёт';return}
+    var before=att?att.paid:0;
+    tg.openInvoice(j.link,function(st){
+      if(st!=='paid')return;
+      (function poll(i){setTimeout(function(){
+        api('/state',{}).then(function(r){setAtt(r);if(r.paid>before){ftxt(W/2,300,'+1 попытка!','#ffd54a');hap('n','success')}else if(i<8)poll(i+1)})['catch'](function(){});
+      },1200)})(0);
+    });
+  })['catch'](function(){busy=false;msg='нет связи с сервером'});
+}
+function nextRun(){
+  if(!API_URL){init();return}
+  if(att&&att.free+att.paid>0)startRun();else state='menu';
+}
+function fmt(sec){var m=Math.floor(sec/60),r=sec%60;return(m<10?'0':'')+m+':'+(r<10?'0':'')+r}
 lbLoad();
 
 // ===== ЗВУК (синтез, файлов нет) =====
@@ -247,14 +283,32 @@ function frame(ts){
   }
   g.globalAlpha=1;
   // HUD
-  T(String(score),W/2,80,64);
-  T('рекорд '+best,W/2,110,18,'rgba(255,255,255,.85)');
+  if(state!=='menu'){T(String(score),W/2,80,64);T('рекорд '+best,W/2,110,18,'rgba(255,255,255,.85)')}
   g.font='28px sans-serif';g.textAlign='center';g.fillText(muted?'🔇':'🔊',560,50);
   if(shield){g.font='28px sans-serif';g.textAlign='left';g.fillText('🛡',20,52)}
   if(state==='play'&&fl>=12){T('ветер',20,92,16,'rgba(255,255,255,.8)','left')}
   if(state==='play'&&combo>1)T('×'+combo,W/2,142,24,'#ffe14d');
   if(state==='play'&&score===0)T('тапай, чтобы поставить блок',W/2,190,22);
   if(state==='play'&&cur.gold)T('золотой блок: идеально = +5',W/2,168,18,'#ffd54a');
+  if(state==='menu'){
+    g.fillStyle='rgba(10,8,30,.55)';g.fillRect(0,0,W,H);
+    T('Башня',W/2,150,56);
+    if(!tg||!tg.initData){T('открой игру через Telegram',W/2,300,24)}
+    else if(!att){T(msg||'загрузка…',W/2,300,24)}
+    else{
+      var tot2=att.free+att.paid;
+      T('Попыток: '+tot2,W/2,225,34,'#ffe14d');
+      T('бесплатных '+att.free+' из '+att.max+(att.paid?' · купленных '+att.paid:''),W/2,258,18,'rgba(255,255,255,.85)');
+      if(tot2>0){g.fillStyle='#34c759';g.fillRect(170,300,260,56);T(busy?'...':'Играть',W/2,338,26)}
+      else{
+        var rem=Math.max(0,Math.ceil(att.refillAt-(Date.now()+srvOff)/1000));
+        T('Новые '+att.max+' попыток через '+fmt(rem),W/2,325,22);
+        if(rem<=0&&Date.now()-lastFetch>3000)loadAtt();
+      }
+      if(tg.openInvoice){g.fillStyle='#f5a623';g.fillRect(170,385,260,56);T('Купить попытку ⭐'+att.price,W/2,423,24)}
+    }
+    if(msg)T(msg,W/2,490,18,'#ff8a8a');
+  }
   if(state==='over'){
     g.fillStyle='rgba(10,8,30,.68)';g.fillRect(0,0,W,H);
     T('Башня рухнула',W/2,130,44);
@@ -263,9 +317,10 @@ function frame(ts){
       top.map(function(n,i){return(i+1)+'. '+n});
     T(remote?'Топ игроков':'Твой топ',W/2,225,20,'#ffe14d');
     for(var n=0;n<list.length;n++)T(list[n],W/2,255+n*28,20,'#fff');
-    T('тапни, чтобы начать заново',W/2,430,22,'#ffe14d');
-    g.fillStyle='#2aabee';g.fillRect(170,470,260,54);
-    T('Поделиться',W/2,506,22);
+    var tot=att?att.free+att.paid:0;
+    T(API_URL?(att?(tot>0?'тапни, осталось попыток: '+tot:'попытки закончились, тапни'):'тапни, чтобы продолжить'):'тапни, чтобы начать заново',W/2,425,22,'#ffe14d');
+    g.fillStyle='#2aabee';g.fillRect(170,455,260,50);
+    T('Поделиться',W/2,490,22);
   }
   requestAnimationFrame(frame);
 }
@@ -277,15 +332,25 @@ function press(e){
     var r=cv.getBoundingClientRect(),sc=W/r.width;
     var x=(e.clientX-r.left)*sc,y=(e.clientY-r.top)*sc;
     if(x>520&&y<80){muted=!muted;save('tw_mute',muted?'1':'0');return}
-    if(state==='over'&&x>=170&&x<=430&&y>=470&&y<=524){shareScore();return}
+    if(state==='menu'){
+      if(x>=170&&x<=430){
+        if(att&&att.free+att.paid>0&&y>=300&&y<=356){startRun();return}
+        if(att&&tg&&tg.openInvoice&&y>=385&&y<=441){buy();return}
+      }
+      return;
+    }
+    if(state==='over'&&x>=170&&x<=430&&y>=455&&y<=505){shareScore();return}
   }
-  if(state==='over'){init();return}
+  if(state==='menu')return;
+  if(state==='over'){nextRun();return}
   var res=drop();
   if(res==='perfect')hap('i','medium');else if(res==='place')hap('i','light');
 }
 cv.addEventListener('pointerdown',press);
 document.addEventListener('keydown',function(e){if(e.code==='Space'||e.key===' ')press(e)});
-init();requestAnimationFrame(frame);
+init();
+if(API_URL){state='menu';loadAtt()}
+requestAnimationFrame(frame);
 })();
 </script>
 </body>
