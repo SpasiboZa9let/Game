@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Башня</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+html,body{margin:0;height:100%;background:#14102b;overflow:hidden;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+body{display:flex;align-items:center;justify-content:center}
+canvas{width:100%;max-width:600px;aspect-ratio:1/1;max-height:100%;display:block}
+</style>
+</head>
+<body>
+<canvas id="c" width="600" height="600"></canvas>
+<script>
+(function(){
+var APP_LINK='https://t.me/Realcyberfoxbot/tower'; // замени на свою ссылку на Mini App
+var tg=(window.Telegram&&Telegram.WebApp)||null;
+if(tg){try{tg.ready();tg.expand();tg.disableVerticalSwipes&&tg.disableVerticalSwipes();tg.setHeaderColor&&tg.setHeaderColor('#14102b');tg.setBackgroundColor&&tg.setBackgroundColor('#14102b')}catch(e){}}
+function hap(t,v){try{if(tg&&tg.HapticFeedback){t==='n'?tg.HapticFeedback.notificationOccurred(v):tg.HapticFeedback.impactOccurred(v)}}catch(e){}}
+function saveBest(){
+  try{localStorage.setItem('tw_best',best)}catch(e){}
+  try{if(tg&&tg.CloudStorage)tg.CloudStorage.setItem('tw_best',String(best))}catch(e){}
+}
+function shareScore(){
+  var text='Я построил башню в '+score+' этажей! Побьёшь?';
+  var u='https://t.me/share/url?url='+encodeURIComponent(APP_LINK)+'&text='+encodeURIComponent(text);
+  try{if(tg&&tg.openTelegramLink){tg.openTelegramLink(u);return}}catch(e){}
+  try{window.open(u,'_blank')}catch(e){}
+}
+var cv=document.getElementById('c'),g=cv.getContext('2d');
+var W=600,H=600,BH=28,BASE=300;
+var st,tower,cur,dir,speed,score,best=0,camY,camT,hue,combo,fx,state,shake,bg;
+try{best=+localStorage.getItem('tw_best')||0}catch(e){}
+try{if(tg&&tg.CloudStorage)tg.CloudStorage.getItem('tw_best',function(err,v){v=+v||0;if(!err&&v>best)best=v})}catch(e){}
+
+function init(){
+  tower=[{x:(W-BASE)/2,w:BASE,h:hue=Math.random()*360}];
+  score=0;combo=0;speed=3.2;dir=1;camY=0;camT=0;fx=[];shake=0;state='play';
+  spawn();
+}
+function spawn(){
+  var top=tower[tower.length-1];
+  cur={x:dir>0?-top.w:W,w:top.w,h:(top.h+9)%360};
+}
+function drop(){
+  if(state==='over'){init();return}
+  var top=tower[tower.length-1];
+  var l=Math.max(cur.x,top.x),r=Math.min(cur.x+cur.w,top.x+top.w);
+  var ov=r-l;
+  if(ov<=0){
+    fx.push({x:cur.x,y:0,w:cur.w,h:cur.h,vy:0,vx:0,fall:1});
+    state='over';shake=14;
+    if(score>best){best=score;saveBest()}
+    return;
+  }
+  var perfect=Math.abs(cur.x-top.x)<6;
+  if(perfect){
+    combo++;
+    cur.x=top.x;
+    if(combo>=3&&cur.w<BASE){var grow=Math.min(10,BASE-cur.w);cur.x-=grow/2;cur.w+=grow}
+    fx.push({ring:1,x:cur.x+cur.w/2,y:0,r:10,a:1});
+    shake=5;
+  }else{
+    combo=0;
+    var cutW=cur.w-ov;
+    var cx=cur.x<top.x?cur.x:r;
+    fx.push({x:cx,y:0,w:cutW,h:cur.h,vy:0,vx:cur.x<top.x?-1.5:1.5,fall:1});
+    cur.x=l;cur.w=ov;
+  }
+  tower.push({x:cur.x,w:cur.w,h:cur.h});
+  score++;
+  speed=Math.min(3.2+score*0.12,9);
+  dir=-dir;
+  if(tower.length>7)camT+=BH;
+  spawn();
+}
+function blk(x,y,w,h){
+  g.fillStyle='hsl('+h+',75%,58%)';g.fillRect(x,y,w,BH);
+  g.fillStyle='hsl('+h+',75%,70%)';g.fillRect(x,y,w,5);
+  g.fillStyle='hsl('+h+',70%,42%)';g.fillRect(x,y+BH-5,w,5);
+}
+function yOf(i){return H-90-i*BH+camY}
+function frame(){
+  var t=tower.length;
+  camY+=(camT-camY)*0.12;
+  if(state==='play'){
+    cur.x+=dir*speed;
+    if(dir>0&&cur.x>W){dir=-1}
+    if(dir<0&&cur.x+cur.w<0){dir=1}
+  }
+  var top=tower[t-1];
+  var bh=(top.h*1+200)%360;
+  var gr=g.createLinearGradient(0,0,0,H);
+  gr.addColorStop(0,'hsl('+((bh+score*3)%360)+',55%,16%)');
+  gr.addColorStop(1,'hsl('+((bh+60+score*3)%360)+',60%,30%)');
+  g.fillStyle=gr;g.fillRect(0,0,W,H);
+  g.save();
+  if(shake>0){g.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);shake*=0.85}
+  for(var i=0;i<t;i++){var b=tower[i],y=yOf(i);if(y<H&&y>-BH)blk(b.x,y,b.w,b.h)}
+  if(state==='play')blk(cur.x,yOf(t),cur.w,cur.h);
+  for(var k=fx.length-1;k>=0;k--){
+    var f=fx[k];
+    if(f.ring){
+      f.r+=5;f.a-=0.06;
+      var ry=yOf(t-1);
+      g.strokeStyle='rgba(255,255,255,'+Math.max(f.a,0)+')';g.lineWidth=3;
+      g.beginPath();g.ellipse(f.x,ry+BH/2,f.r*2,f.r*0.5,0,0,6.283);g.stroke();
+      if(f.a<=0)fx.splice(k,1);
+    }else{
+      f.vy+=0.8;f.y+=f.vy;f.x+=f.vx;
+      blk(f.x,yOf(f.y===0?t-1:t-1)+f.y,f.w,f.h);
+      if(f.y>700)fx.splice(k,1);
+    }
+  }
+  g.restore();
+  g.textAlign='center';g.fillStyle='#fff';
+  g.font='bold 64px sans-serif';g.fillText(score,W/2,80);
+  g.font='18px sans-serif';g.fillStyle='rgba(255,255,255,.7)';
+  g.fillText('рекорд '+best,W/2,108);
+  if(combo>1){g.fillStyle='#ffe14d';g.font='bold 24px sans-serif';g.fillText('идеально ×'+combo,W/2,140)}
+  if(state==='over'){
+    g.fillStyle='rgba(10,8,30,.6)';g.fillRect(0,0,W,H);
+    g.fillStyle='#fff';g.font='bold 44px sans-serif';g.fillText('Башня рухнула',W/2,260);
+    g.font='24px sans-serif';g.fillText('Этажей: '+score,W/2,305);
+    g.fillStyle='#ffe14d';g.fillText('тапни, чтобы начать заново',W/2,350);
+    g.fillStyle='#2aabee';g.fillRect(170,385,260,54);
+    g.fillStyle='#fff';g.font='bold 22px sans-serif';g.fillText('Поделиться',W/2,420);
+  }else if(score===0){
+    g.fillStyle='rgba(255,255,255,.85)';g.font='22px sans-serif';
+    g.fillText('тапай, чтобы поставить блок',W/2,180);
+  }
+  requestAnimationFrame(frame);
+}
+function press(e){
+  if(e&&e.preventDefault)e.preventDefault();
+  if(state==='over'&&e&&e.clientX!==undefined){
+    var r=cv.getBoundingClientRect(),sc=W/r.width;
+    var x=(e.clientX-r.left)*sc,y=(e.clientY-r.top)*sc;
+    if(x>=170&&x<=430&&y>=385&&y<=439){shareScore();return}
+  }
+  var was=state,pc=combo;
+  drop();
+  if(was==='play'){
+    if(state==='over')hap('n','error');
+    else if(combo>pc)hap('i','medium');
+    else hap('i','light');
+  }
+}
+cv.addEventListener('pointerdown',press);
+document.addEventListener('keydown',function(e){if(e.code==='Space'||e.key===' ')press(e)});
+init();frame();
+})();
+</script>
+</body>
+</html>
